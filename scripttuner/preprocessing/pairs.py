@@ -23,6 +23,7 @@ from tqdm import tqdm
 
 from scripttuner.persistence.cache import DiskCache, make_cache_key
 from scripttuner.preprocessing.ir import Monologue, Pair
+from scripttuner.preprocessing.text_normalize import normalize_punctuation
 
 SYSTEM_PROMPT = (
     "Convert the spoken English transcript into clean written English. "
@@ -182,7 +183,7 @@ def convert_to_formal(
                 source=mono.source,
                 style=style,
                 speaker=mono.speaker,
-                spoken_text=mono.text,
+                spoken_text=normalize_punctuation(mono.text),
                 formal_text=formal_text,
                 monologue_id=mono.monologue_id,
                 metadata=metadata,

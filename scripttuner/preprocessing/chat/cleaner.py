@@ -13,17 +13,33 @@ from dataclasses import replace
 from scripttuner.preprocessing.ir import Utterance
 
 # 1. 오버랩 마커: ⌈...⌉ 또는 ⌊2...⌋2 형태 (숫자 인덱스 옵셔널)
+#    인덱스 숫자는 데이터상 비대칭으로 붙는다: 여는쪽은 기호 뒤(`⌊2`), 닫는쪽은
+#    기호 뒤(`⌋2`)뿐 아니라 앞 단어 끝(`me2⌋`)에도 온다. 닫는 마커는 앞뒤 숫자를
+#    모두 흡수해 'me2' 같은 오염을 막는다. 진짜 라벨(F2, A1, B2 vitamins 등)은
+#    인접한 오버랩 마커가 없으므로 영향받지 않는다.
 _OVERLAP_OPEN_RE = re.compile(r"⌈\d*")
-_OVERLAP_CLOSE_RE = re.compile(r"⌉\d*")
+_OVERLAP_CLOSE_RE = re.compile(r"\d*⌉\d*")
 _OVERLAP_OPEN_LOW_RE = re.compile(r"⌊\d*")
-_OVERLAP_CLOSE_LOW_RE = re.compile(r"⌋\d*")
+_OVERLAP_CLOSE_LOW_RE = re.compile(r"\d*⌋\d*")
 
-# 2. 코드 스위칭 / L2 표기: &{l=X ... &}l=X — 외곽 마커만 제거, 내부 보존
-_LANG_OPEN_RE = re.compile(r"&\{l=\S+\s*")
-_LANG_CLOSE_RE = re.compile(r"\s*&\}l=\S+")
+# 2. 스코프 마커: &{X=... ... &}X=X — 외곽 마커만 제거, 내부 발화는 보존
+#    l=코드스위칭/L2, n=비언어음(SNAP/THUMP/MIC 등). 둘 다 마커 사이의 단어는
+#    실제 발화이므로 보존한다. `&{n=THUMP}` 같은 self-closed 형도 open이 흡수한다.
+_SCOPE_OPEN_RE = re.compile(r"&\{[a-z]=\S+\s*")
+_SCOPE_CLOSE_RE = re.compile(r"\s*&\}[a-z]=\S+")
+
+# 2b. 코멘트 의존 티어: [% laugh] 등 — 통째 제거 (발화 외 주석)
+_COMMENT_TIER_RE = re.compile(r"\[%[^\]]*\]")
 
 # 3. 비언어 어노테이션: &=tsk, &=laugh, &=in, &=ex 등 (&=word 패턴)
 _NONVERBAL_RE = re.compile(r"&=\S+")
+
+# 3b. Unintelligible 음성: 단독 대문자 X 런 (X, XX, XXX...). 알아들을 수 없는 음.
+#     X-rays·XSes·X-(false start)는 글자/하이픈/아포스트로피가 붙어 자동 회피된다.
+_UNINTELLIGIBLE_RE = re.compile(r"(?<![\w'-])X+(?![\w'-])")
+
+# 3c. 밑줄 결합 발화: uh_you, U_S, D_I 등 — `_`를 공백으로 (두 단어 복원)
+_UNDERSCORE_JOIN_RE = re.compile(r"(?<=\w)_(?=\w)")
 
 # 4. 성문 폐쇄음 표기: 단어 시작의 ʔ (예: ʔuh → uh, youʔ → you)
 _GLOTTAL_RE = re.compile(r"ʔ")
@@ -60,15 +76,26 @@ def clean_text(text: str) -> str:
     text = _OVERLAP_OPEN_LOW_RE.sub("", text)
     text = _OVERLAP_CLOSE_LOW_RE.sub("", text)
 
-    # 2. 코드 스위칭 / L2 외곽 마커 제거 (내부 보존)
-    text = _LANG_OPEN_RE.sub("", text)
-    text = _LANG_CLOSE_RE.sub("", text)
+    # 2. 스코프 마커 외곽 제거 (내부 발화 보존). XX 제거(3b)보다 먼저 —
+    #    &{n=MIC XX ...} 처럼 스코프 안의 XX를 먼저 노출시킨 뒤 3b가 처리한다.
+    text = _SCOPE_OPEN_RE.sub("", text)
+    text = _SCOPE_CLOSE_RE.sub("", text)
+
+    # 2b. 코멘트 의존 티어 제거
+    text = _COMMENT_TIER_RE.sub("", text)
 
     # 3. 비언어 어노테이션 제거
     text = _NONVERBAL_RE.sub("", text)
 
-    # 4. 성문 폐쇄음 표기 정규화
+    # 4. 성문 폐쇄음 표기 정규화. 3b(X 제거)보다 먼저 — "ʔX"의 ʔ를 떼야 X가
+    #    단독 토큰으로 노출되어 3b가 unintelligible로 인식한다.
     text = _GLOTTAL_RE.sub("", text)
+
+    # 3b. Unintelligible 대문자 X 런 제거
+    text = _UNINTELLIGIBLE_RE.sub("", text)
+
+    # 3c. 밑줄 결합 발화 → 공백
+    text = _UNDERSCORE_JOIN_RE.sub(" ", text)
 
     # 4b. Vowel lengthening colon 제거
     text = _VOWEL_LENGTH_RE.sub("", text)

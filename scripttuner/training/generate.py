@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from scripttuner.preprocessing.text_normalize import normalize_punctuation
 from scripttuner.training.registry import get_model_spec, require_hf_id
 
 
@@ -80,6 +81,8 @@ def run_generate(
                     no_repeat_ngram_size=no_repeat_ngram_size,
                 )
             predictions = tokenizer.batch_decode(generated, skip_special_tokens=True)
+            # 추론 출력 구두점 정규화 (학습 target과 동일 규칙, cf. ADR-0012)
+            predictions = [normalize_punctuation(p) for p in predictions]
             for row, prediction in zip(batch, predictions, strict=True):
                 out_row = {
                     "pair_id": row.get("pair_id"),

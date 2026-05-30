@@ -35,6 +35,19 @@ def test_overlap_markers_removed() -> None:
     assert cleaner.clean_text("⌊2 Yeah ⌋2 right") == "Yeah right"
 
 
+def test_overlap_close_index_before_word_end() -> None:
+    # 닫는 마커 직전 단어끝에 인덱스: 'me2⌋' → 'me' (오염 'me2' 방지)
+    assert cleaner.clean_text("⌊2tell me2⌋ now") == "tell me now"
+    assert cleaner.clean_text("you ⌊know2⌋ how") == "you know how"
+
+
+def test_overlap_does_not_touch_real_labels() -> None:
+    # F1/F2(포먼트), A1, B2 등 마커 없는 라벨은 보존
+    assert cleaner.clean_text("the F2 and the F1") == "the F2 and the F1"
+    assert cleaner.clean_text("you can do A1 sauce") == "you can do A1 sauce"
+    assert cleaner.clean_text("take B2 vitamins") == "take B2 vitamins"
+
+
 def test_nonverbal_annotations_removed() -> None:
     assert cleaner.clean_text("&=tsk really &=laugh") == "really"
     assert cleaner.clean_text("&=in So &=ex") == "So"
@@ -93,6 +106,58 @@ def test_combined_realistic() -> None:
     raw = "(..) ⌈ &=laugh ⌉ I &{l=X don't &}l=X know +/."
     expected = "<pause:long> I don't know ."
     assert cleaner.clean_text(raw) == expected
+
+
+# ----- 코멘트 티어 / 스코프 / unintelligible / 밑줄 (ADR-0012 Tier A 보강) -----
+
+
+def test_comment_tier_removed() -> None:
+    assert cleaner.clean_text("piece of horse [% laugh] . I mean") == "piece of horse . I mean"
+
+
+def test_scope_nonverbal_outer_removed_inner_preserved() -> None:
+    # &{n=SNAP just &}n=SNAP → "just" 보존
+    assert cleaner.clean_text("dollars &{n=SNAP just &}n=SNAP like") == "dollars just like"
+
+
+def test_scope_nonverbal_self_closed_removed() -> None:
+    assert cleaner.clean_text("wall &{n=THUMP} okay") == "wall okay"
+
+
+def test_scope_inner_unintelligible_then_stripped() -> None:
+    # 스코프 외곽 제거 후 내부 XX가 노출되어 3b가 제거
+    assert cleaner.clean_text("sorry &{n=MIC XX knocked &}n=MIC me") == "sorry knocked me"
+
+
+def test_unintelligible_single_and_runs_removed() -> None:
+    assert cleaner.clean_text("you know XX ? Oh") == "you know ? Oh"
+    assert cleaner.clean_text("remember that . XXX Ken") == "remember that . Ken"
+    assert cleaner.clean_text("fast . X . Hundred") == "fast . . Hundred"
+
+
+def test_unintelligible_preserves_real_x_words() -> None:
+    # X-rays, XSes, X-(false start)는 보존
+    assert cleaner.clean_text("more X-rays or") == "more X-rays or"
+    assert cleaner.clean_text("section four XSes that") == "section four XSes that"
+    assert cleaner.clean_text("and I X- was") == "and I X- was"
+
+
+def test_unintelligible_after_glottal_strip() -> None:
+    # "ʔX"는 ʔ 제거 후 X가 노출되어 unintelligible로 제거돼야 함
+    assert cleaner.clean_text("(.) ʔX .") == "<pause:short> ."
+    assert cleaner.clean_text("⌊3 ʔX ʔuh ʔuh ⌋3 .") == "uh uh ."
+
+
+def test_underscore_join_to_space() -> None:
+    assert cleaner.clean_text("well uh_you know") == "well uh you know"
+    assert cleaner.clean_text("the U_S history") == "the U S history"
+
+
+def test_uppercase_abbreviations_preserved() -> None:
+    # 실제 발화 약어·고유명사는 보존 (X 규칙은 X에만 적용)
+    assert cleaner.clean_text("a bank CD as") == "a bank CD as"
+    assert cleaner.clean_text("called an IRA it's") == "called an IRA it's"
+    assert cleaner.clean_text("see Mike on TV ?") == "see Mike on TV ?"
 
 
 # ----- clean(list[Utterance]) API -----
