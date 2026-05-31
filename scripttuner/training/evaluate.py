@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -25,15 +26,40 @@ from scripttuner.preprocessing.stats import (
     _word_tokens,
 )
 
+# 부호 앞 공백(전사 잔여 표기, Tier A가 제거 대상; cf. ADR-0012) — pause 토큰의
+# 콜론은 제외하기 위해 토큰을 먼저 strip한 텍스트에 적용한다.
+_SPACE_BEFORE_PUNCT_RE = re.compile(r" +[.,?!;:]")
+_PAUSE_TOKEN_RE = re.compile(r"<pause:\w+>")
+
+
+def _punct_features(texts: list[str]) -> dict[str, Any]:
+    """아이템당 구두점 통계 (cf. ADR-0012 검증용).
+
+    Tier B 효과(쉼표·물음표 복원)와 Tier A 효과(' .' 잔여 제거)를 prediction과
+    reference에서 같은 척도로 비교한다. ' .' 카운트는 pause 토큰 콜론에 오염되지
+    않도록 토큰 strip 후 측정한다.
+    """
+    stripped = [_PAUSE_TOKEN_RE.sub(" ", t) for t in texts]
+    return {
+        "commas_per_item": _distribution([t.count(",") for t in texts]),
+        "questions_per_item": _distribution([t.count("?") for t in texts]),
+        "periods_per_item": _distribution([t.count(".") for t in texts]),
+        "exclaims_per_item": _distribution([t.count("!") for t in texts]),
+        "space_before_punct_per_item": _distribution(
+            [len(_SPACE_BEFORE_PUNCT_RE.findall(t)) for t in stripped]
+        ),
+    }
+
 
 def _text_features(texts: list[str]) -> dict[str, Any]:
-    """텍스트 리스트의 구어성 피처 분포(길이/filler/pause)."""
+    """텍스트 리스트의 구어성 피처 분포(길이/filler/pause/구두점)."""
     token_lists = [_word_tokens(t) for t in texts]
     return {
         "tokens": _distribution([len(ts) for ts in token_lists]),
         "fillers_per_item": _distribution([_count_fillers(ts) for ts in token_lists]),
         "pause_short_per_item": _distribution([len(_PAUSE_SHORT_RE.findall(t)) for t in texts]),
         "pause_long_per_item": _distribution([len(_PAUSE_LONG_RE.findall(t)) for t in texts]),
+        "punct": _punct_features(texts),
     }
 
 
