@@ -43,10 +43,13 @@ def run_finetune(
     grad_accum: int = 4,
     learning_rate: float = 2e-4,
     seed: int = 42,
+    gradient_checkpointing: bool = True,
 ) -> dict[str, Any]:
     """formatted split을 학습하고 어댑터 + MANIFEST를 저장한다.
 
     `max_steps`가 주어지면 epochs 대신 step 수로 종료한다(스모크/빠른 실행용).
+    `gradient_checkpointing`을 끄면 activation 재계산을 생략해 20~30% 빨라지나 VRAM을
+    더 쓴다(결과 수치는 동일). VRAM 여유가 있을 때(예: T4 16GB)만 끈다.
     """
 
     spec = get_model_spec(model_key)
@@ -71,6 +74,7 @@ def run_finetune(
         "grad_accum": grad_accum,
         "learning_rate": learning_rate,
         "seed": seed,
+        "gradient_checkpointing": gradient_checkpointing,
     }
     if spec.format_kind == "chat":
         result = _train_chat(**kwargs)
@@ -98,6 +102,7 @@ def run_finetune(
             "grad_accum": grad_accum,
             "learning_rate": learning_rate,
             "seed": seed,
+            "gradient_checkpointing": gradient_checkpointing,
         },
         "train_loss": result["train_loss"],
         "train_runtime_sec": result["train_runtime_sec"],
@@ -130,6 +135,7 @@ def _train_chat(
     grad_accum: int,
     learning_rate: float,
     seed: int,
+    gradient_checkpointing: bool,
 ) -> dict[str, Any]:
     """decoder-only chat 모델 QLoRA (Unsloth)."""
 
@@ -151,7 +157,7 @@ def _train_chat(
         lora_dropout=lora_dropout,
         bias="none",
         target_modules=_CHAT_LORA_TARGET_MODULES,
-        use_gradient_checkpointing="unsloth",
+        use_gradient_checkpointing="unsloth" if gradient_checkpointing else False,
         random_state=seed,
     )
 
@@ -224,6 +230,7 @@ def _train_seq2seq(
     grad_accum: int,
     learning_rate: float,
     seed: int,
+    gradient_checkpointing: bool,
 ) -> dict[str, Any]:
     """encoder-decoder 모델 LoRA (transformers Seq2SeqTrainer).
 
@@ -255,7 +262,9 @@ def _train_seq2seq(
     )
     model = get_peft_model(model, peft_config)
     # gradient checkpointing이 PEFT(동결 base + LoRA)에서 동작하려면 입력이 grad를 요구해야 한다.
-    model.enable_input_require_grads()
+    # checkpointing을 끄면 불필요하므로 켜진 경우에만 호출한다.
+    if gradient_checkpointing:
+        model.enable_input_require_grads()
 
     data_files = {"train": str(train_path)}
     if val_path is not None:
@@ -311,8 +320,10 @@ def _train_seq2seq(
         logging_steps=1,
         optim="adamw_torch",
         bf16=True,
-        gradient_checkpointing=True,
-        gradient_checkpointing_kwargs={"use_reentrant": False},
+        gradient_checkpointing=gradient_checkpointing,
+        gradient_checkpointing_kwargs=(
+            {"use_reentrant": False} if gradient_checkpointing else None
+        ),
         seed=seed,
         report_to="none",
         **eval_kwargs,
