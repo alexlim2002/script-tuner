@@ -49,3 +49,38 @@ AFTER에서 둘 다 교정되며 절 경계에 쉼표가 자연스럽게 들어�
 이어붙인다. AFTER는 공백 아티팩트가 사라지고 절 경계에 쉼표가 들어가 사람 발화의
 호흡에 가까워진다(4번은 `?`까지 복원). 동시에 `gonna`·`em`/`them` 축약, filler·pause
 같은 구어 특징은 그대로 유지된다 — 구두점만 고치고 구어성은 보존.
+
+---
+
+# 정성 샘플 — 스타일 제어 토큰 분기 (통합 모델)
+
+통합 모델 `t5gemma2-1b-COMBINED-lora`의 **동일 입력에 style 토큰만 바꿔** 생성한
+casual vs semi_formal 출력. 같은 입력이므로 차이는 순수하게 제어 토큰 효과다.
+
+- **CASUAL**: `<style:casual>` 출력 / **SEMI**: `<style:semi_formal>` 출력
+- 두 스타일의 핵심 차이는 ① **문장 분절**(casual은 짧게 토막, semi는 길게 이어붙임),
+  ② **pause**(casual만 방출). 분포 수치는 [`metrics_summary.md`](metrics_summary.md) 참조.
+
+---
+
+**1.** (분절 + pause 대비)
+> **입력:** Alright. Because that would be really handy then, we can actually test it on the user, as opposed to just doing it and not using it. Because if you just have the segmentation, that's great, but we cannot compare it to the hand annotated, you know, the hand segmented tool.
+>
+> **CASUAL:** `<pause:long>` Alright. `<pause:short>` Because that would be really handy then, `<pause:long>` we can actually test it on the user. `<pause:short>` As opposed to `<pause:long>` just doing it and not using it. `<pause:long>` Because if you just have the segmentation. `<pause:short>` That's great. `<pause:short>` But we can't `<pause:long>` compare that to the hand annotated. `<pause:short>` You know, the hand segmented tool.
+>
+> **SEMI:** Yeah. Alright. Because that would be really handy then, then we can actually test it on the user as opposed to just doing it and not using it. Because if you just got the segmentation, that's great, but we can't compare to the hand annotated, you know, the hand segmented tool.
+
+**2.** (이어붙이기 대비)
+> **입력:** She said she thought she had gotten a brand inspection done since she got to Colorado, but then she said she didn't know where it was, and that's what he wanted to know.
+>
+> **CASUAL:** `<pause:long>` She said she thought she'd gotten a brand inspection done `<pause:short>` since she got to Colorado but then she said `<pause:short>` she didn't know where it was and that's what he wanted to know and. `<pause:short>` Uh.
+>
+> **SEMI:** She said she thought she had gotten a brand inspection done since she got to Colorado, but then she said she didn't know where it was and that's what he wanted to know.
+
+---
+
+관찰: 같은 내용을 CASUAL은 pause를 박으며 짧은 문장으로 토막내고(1번: 8문장),
+SEMI는 pause 없이 절을 쉼표로 이어 한 흐름으로 묶는다(1번: 2~3문장). 1번 CASUAL의
+`That's great.` / `But we can't compare...` 처럼 절을 마침표로 끊는 vs SEMI의
+`that's great, but we can't compare...` 쉼표 연결이 분절 차이를 직접 보여준다.
+제어 토큰이 동일 입력에서 두 발화 스타일을 분기시킨다.
