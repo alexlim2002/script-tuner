@@ -110,6 +110,9 @@ def convert_to_formal(
     prompt_version: str = DEFAULT_PROMPT_VERSION,
     style: str = DEFAULT_STYLE,
     progress: bool = True,
+    repunct_client: LLMClient | None = None,
+    repunct_cache_dir: Path | None = None,
+    repunct_prompt_version: str | None = None,
 ) -> list[Pair]:
     """Convert spoken monologues to (spoken, formal) pairs via LLM.
 
@@ -129,14 +132,28 @@ def convert_to_formal(
             modifying SYSTEM_PROMPT.
         style: Style label for the produced pair (cf. ADR-0005).
         progress: Show tqdm progress bar.
+        repunct_client: When provided, the spoken side gets Tier-B re-punctuation
+            (commas/question marks) on top of Tier-A normalization (cf. ADR-0012).
+            The formal side is unaffected — its LLM input is the *pre*-repunct text,
+            so the formal cache stays valid (no re-call). Uses the same
+            ``model``/``model_alias`` as formal. On invariant failure or LLM error
+            the spoken falls back to the Tier-A text (no data loss).
+        repunct_cache_dir: Disk cache for the re-punctuation LLM (separate key space
+            from the formal cache).
+        repunct_prompt_version: Prompt version for re-punctuation; defaults to the
+            repunctuate module default.
 
     Returns:
         List of `Pair` for successfully converted monologues. Failed monologues
         (after client-internal retries) are skipped with a stderr log line.
     """
+    from scripttuner.preprocessing import repunctuate as rp
+
     cache_key_id = model_alias if model_alias is not None else model
     mono_list = list(monologues)
     cache = DiskCache(cache_dir) if cache_dir is not None else None
+    repunct_cache = DiskCache(repunct_cache_dir) if repunct_cache_dir is not None else None
+    rp_prompt_version = repunct_prompt_version or rp.DEFAULT_PROMPT_VERSION
     iterator: Iterable[Monologue] = (
         tqdm(mono_list, desc="LLM pairs") if progress else mono_list
     )
@@ -169,6 +186,27 @@ def convert_to_formal(
 
         formal_text = _normalize_typography(formal_text)
 
+        # spoken: Tier A normalization always; Tier B re-punctuation if enabled.
+        spoken_text = normalize_punctuation(mono.text)
+        tier_b_meta: dict[str, Any] | None = None
+        if repunct_client is not None:
+            try:
+                spoken_text, rmeta = rp.repunctuate_spoken(
+                    spoken_text,
+                    client=repunct_client,
+                    cache=repunct_cache,
+                    model=model,
+                    model_alias=model_alias,
+                    prompt_version=rp_prompt_version,
+                )
+                tier_b_meta = {k: rmeta.get(k) for k in ("applied", "reason", "from_cache")}
+            except Exception as e:  # noqa: BLE001 — keep Tier-A spoken, record for later Groq pass
+                tier_b_meta = {"applied": False, "reason": f"error:{type(e).__name__}"}
+                print(
+                    f"[pairs] repunct error {mono.monologue_id}: {type(e).__name__}: {e}",
+                    file=sys.stderr,
+                )
+
         pair_id = f"{mono.monologue_id}#{style}#{prompt_version}"
         metadata = {
             **call_meta,
@@ -177,13 +215,15 @@ def convert_to_formal(
             "prompt_version": prompt_version,
             "from_cache": from_cache,
         }
+        if tier_b_meta is not None:
+            metadata["tier_b"] = tier_b_meta
         pairs.append(
             Pair(
                 pair_id=pair_id,
                 source=mono.source,
                 style=style,
                 speaker=mono.speaker,
-                spoken_text=normalize_punctuation(mono.text),
+                spoken_text=spoken_text,
                 formal_text=formal_text,
                 monologue_id=mono.monologue_id,
                 metadata=metadata,
