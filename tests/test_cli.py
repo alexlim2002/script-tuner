@@ -123,16 +123,35 @@ def test_parse_writes_correct_count(tmp_path: Path) -> None:
 
 
 class _FakeOpenAIClient:
-    """Stand-in for OpenAICompatibleClient — no network, deterministic."""
+    """Stand-in for the LLM client — no network, deterministic.
 
-    def __init__(self, *, model: str, max_retries: int = 3) -> None:
+    Distinguishes the formal vs re-punctuation system prompt so a single fake can
+    serve both roles: formal echoes the user, re-punctuation returns the user with
+    a trailing comma+period (word sequence unchanged → passes the invariant).
+
+    Patched in for `cli.RateLimitRetryClient`, so it accepts that client's kwargs
+    (``model``; ``sleep``/``max_retries``/``provider`` tolerated and ignored).
+    """
+
+    def __init__(
+        self,
+        *,
+        model: str,
+        max_retries: int = 3,
+        sleep: Any = None,
+        provider: Any = None,
+    ) -> None:
         self._model = model
 
     def complete(self, system: str, user: str) -> tuple[str, dict[str, Any]]:
-        return f"FORMAL[{self._model}]: {user}", {
-            "prompt_tokens": 1,
-            "completion_tokens": 1,
-        }
+        meta = {"prompt_tokens": 1, "completion_tokens": 1}
+        if system.startswith("You are a punctuation restorer"):
+            # 단어는 그대로, 첫 단어 대문자 + 끝에 마침표 (불변식 통과)
+            words = user.split()
+            if words:
+                words[0] = words[0][:1].upper() + words[0][1:]
+            return " ".join(words) + ".", meta
+        return f"FORMAL[{self._model}]: {user}", meta
 
 
 def _write_monologues(path: Path, monos: list[Monologue]) -> None:
@@ -142,7 +161,7 @@ def _write_monologues(path: Path, monos: list[Monologue]) -> None:
 def test_pairs_subcommand_end_to_end(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(cli, "OpenAICompatibleClient", _FakeOpenAIClient)
+    monkeypatch.setattr(cli, "RateLimitRetryClient", _FakeOpenAIClient)
 
     data_dir = tmp_path / "data"
     mono_path = data_dir / "monologues" / "SBCSAE" / "SBC016.jsonl"
@@ -189,13 +208,59 @@ def test_pairs_subcommand_end_to_end(
     assert pairs[0].spoken_text == "<pause:long> hello <pause:short> there"
     assert pairs[0].formal_text == "FORMAL[fake/model]: hello there"
     assert pairs[0].metadata["model"] == "fake/model"
+    # without --repunct, no tier_b metadata
+    assert "tier_b" not in pairs[0].metadata
+
+
+def test_pairs_subcommand_repunct(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(cli, "RateLimitRetryClient", _FakeOpenAIClient)
+
+    data_dir = tmp_path / "data"
+    mono_path = data_dir / "monologues" / "SBCSAE" / "SBC016.jsonl"
+    _write_monologues(
+        mono_path,
+        [
+            Monologue(
+                source="SBCSAE",
+                monologue_id="SBC016#mono_0001",
+                speaker="TAMM",
+                text="<pause:long> hello there friend",
+                utterance_ids=("u1",),
+                n_tokens=3,
+            ),
+        ],
+    )
+
+    rc = cli.main(
+        [
+            "pairs", "sbcsae", "SBC016",
+            "--model", "fake/model",
+            "--data-dir", str(data_dir),
+            "--no-progress",
+            "--repunct",
+        ]
+    )
+    assert rc == 0
+
+    pairs = read_jsonl(data_dir / "pairs" / "SBCSAE" / "SBC016.jsonl", Pair)
+    p = pairs[0]
+    # formal cache input is pre-repunct → formal unchanged from non-repunct run
+    assert p.formal_text == "FORMAL[fake/model]: hello there friend"
+    # spoken got re-punctuation: capitalized + trailing period, pause re-inserted
+    assert p.spoken_text == "<pause:long> Hello there friend."
+    assert p.metadata["tier_b"]["applied"] is True
+    assert p.metadata["tier_b"]["reason"] == "ok"
+    # repunct cache dir created separately from formal cache
+    assert (data_dir / "cache" / "repunct").is_dir()
 
 
 def test_pairs_subcommand_accepts_model_alias_env(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("LLM_MODEL_ALIAS", "shared-alias")
-    monkeypatch.setattr(cli, "OpenAICompatibleClient", _FakeOpenAIClient)
+    monkeypatch.setattr(cli, "RateLimitRetryClient", _FakeOpenAIClient)
 
     data_dir = tmp_path / "data"
     mono_path = data_dir / "monologues" / "SBCSAE" / "SBC016.jsonl"
@@ -229,6 +294,104 @@ def test_pairs_subcommand_accepts_model_alias_env(
     pairs = read_jsonl(data_dir / "pairs" / "SBCSAE" / "SBC016.jsonl", Pair)
     assert pairs[0].metadata["model"] == "raw/slug:free"
     assert pairs[0].metadata["model_alias"] == "shared-alias"
+
+
+def test_pairs_all_processes_subdir_stems(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(cli, "RateLimitRetryClient", _FakeOpenAIClient)
+    data_dir = tmp_path / "data"
+    sub = data_dir / "monologues_sampled" / "SBCSAE"
+
+    def _mono(stem: str, idx: int, spk: str) -> Monologue:
+        return Monologue(
+            source="SBCSAE",
+            monologue_id=f"{stem}#mono_{idx:04d}",
+            speaker=spk,
+            text="hello there friend",
+            utterance_ids=(f"u{idx}",),
+            n_tokens=3,
+        )
+
+    _write_monologues(sub / "A.jsonl", [_mono("A", 1, "S1"), _mono("A", 2, "S1")])
+    _write_monologues(sub / "B.jsonl", [_mono("B", 1, "S2")])
+
+    rc = cli.main(
+        [
+            "pairs", "sbcsae", "--all",
+            "--monologues-subdir", "monologues_sampled",
+            "--data-dir", str(data_dir),
+            "--model", "fake/model", "--no-cache", "--no-progress",
+            "--style", "semi_formal",
+        ]
+    )
+    assert rc == 0
+    out_dir = data_dir / "pairs" / "SBCSAE"
+    assert {p.name for p in out_dir.glob("*.jsonl")} == {"A.jsonl", "B.jsonl"}
+    pairs_a = read_jsonl(out_dir / "A.jsonl", Pair)
+    assert len(pairs_a) == 2
+    assert all(p.style == "semi_formal" for p in pairs_a)
+
+
+def test_pairs_all_rejects_stem_and_all_together(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(cli, "RateLimitRetryClient", _FakeOpenAIClient)
+    rc = cli.main(
+        ["pairs", "sbcsae", "SBC016", "--all",
+         "--data-dir", str(tmp_path / "data"), "--model", "fake/model"]
+    )
+    assert rc == 2
+
+
+def test_pairs_requires_stem_or_all(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(cli, "RateLimitRetryClient", _FakeOpenAIClient)
+    rc = cli.main(
+        ["pairs", "sbcsae", "--data-dir", str(tmp_path / "data"), "--model", "fake/model"]
+    )
+    assert rc == 2
+
+
+def test_pairs_all_empty_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(cli, "RateLimitRetryClient", _FakeOpenAIClient)
+    rc = cli.main(
+        ["pairs", "sbcsae", "--all", "--monologues-subdir", "monologues_sampled",
+         "--data-dir", str(tmp_path / "data"), "--model", "fake/model"]
+    )
+    assert rc == 1
+
+
+def test_provider_routing_from_env_none_when_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for k in ("LLM_PROVIDER_SORT", "LLM_PROVIDER_MAX_PROMPT", "LLM_PROVIDER_MAX_COMPLETION"):
+        monkeypatch.delenv(k, raising=False)
+    assert cli._provider_routing_from_env() is None
+
+
+def test_provider_routing_from_env_builds_dict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LLM_PROVIDER_SORT", "price")
+    monkeypatch.setenv("LLM_PROVIDER_MAX_PROMPT", "0.2")
+    monkeypatch.setenv("LLM_PROVIDER_MAX_COMPLETION", "0.4")
+    assert cli._provider_routing_from_env() == {
+        "sort": "price",
+        "max_price": {"prompt": 0.2, "completion": 0.4},
+    }
+
+
+def test_provider_routing_partial_only_max_price(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("LLM_PROVIDER_SORT", raising=False)
+    monkeypatch.setenv("LLM_PROVIDER_MAX_PROMPT", "0.2")
+    monkeypatch.delenv("LLM_PROVIDER_MAX_COMPLETION", raising=False)
+    assert cli._provider_routing_from_env() == {"max_price": {"prompt": 0.2}}
 
 
 def test_pairs_subcommand_requires_model(
@@ -267,7 +430,7 @@ def test_pairs_subcommand_requires_model(
 def test_run_subcommand_end_to_end(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(cli, "OpenAICompatibleClient", _FakeOpenAIClient)
+    monkeypatch.setattr(cli, "RateLimitRetryClient", _FakeOpenAIClient)
 
     datasets_dir = tmp_path / "datasets"
     sbcsae_dir = datasets_dir / "sbcsae"
@@ -340,7 +503,7 @@ def test_run_subcommand_multiple_stems(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    monkeypatch.setattr(cli, "OpenAICompatibleClient", _FakeOpenAIClient)
+    monkeypatch.setattr(cli, "RateLimitRetryClient", _FakeOpenAIClient)
     datasets_dir, data_dir = _setup_run_dirs(tmp_path, ["SBC016", "SBC017"])
 
     rc = cli.main(
@@ -373,7 +536,7 @@ def test_run_subcommand_all_flag(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    monkeypatch.setattr(cli, "OpenAICompatibleClient", _FakeOpenAIClient)
+    monkeypatch.setattr(cli, "RateLimitRetryClient", _FakeOpenAIClient)
     datasets_dir, data_dir = _setup_run_dirs(tmp_path, ["SBC001", "SBC002", "SBC003"])
 
     rc = cli.main(
@@ -405,7 +568,7 @@ def test_run_subcommand_partial_failure(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    monkeypatch.setattr(cli, "OpenAICompatibleClient", _FakeOpenAIClient)
+    monkeypatch.setattr(cli, "RateLimitRetryClient", _FakeOpenAIClient)
     # Only SBC016 is on disk; SBC999 is missing → that stem fails, the other succeeds.
     datasets_dir, data_dir = _setup_run_dirs(tmp_path, ["SBC016"])
 
@@ -456,7 +619,7 @@ def test_run_subcommand_requires_stems_or_all(tmp_path: Path) -> None:
 def test_run_subcommand_rejects_stems_and_all_together(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(cli, "OpenAICompatibleClient", _FakeOpenAIClient)
+    monkeypatch.setattr(cli, "RateLimitRetryClient", _FakeOpenAIClient)
     datasets_dir, data_dir = _setup_run_dirs(tmp_path, ["SBC016"])
     rc = cli.main(
         [

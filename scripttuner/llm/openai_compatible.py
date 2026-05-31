@@ -31,19 +31,30 @@ class OpenAICompatibleClient:
     implemented separately once the unit is confirmed.
     """
 
-    def __init__(self, *, model: str, max_retries: int = 3) -> None:
+    def __init__(
+        self,
+        *,
+        model: str,
+        max_retries: int = 3,
+        provider: dict[str, Any] | None = None,
+    ) -> None:
         self._client = OpenAI(max_retries=max_retries)
         self._model = model
+        # OpenRouter provider-routing prefs (sort/max_price/...); passed as
+        # extra_body.provider. None for non-OpenRouter endpoints (ignored anyway).
+        self._provider = provider
 
     def complete(self, system: str, user: str) -> tuple[str, dict[str, Any]]:
         messages: list[ChatCompletionMessageParam] = [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ]
+        extra_body = {"provider": self._provider} if self._provider else None
         try:
             resp = self._client.chat.completions.create(
                 model=self._model,
                 messages=messages,
+                extra_body=extra_body,
             )
         except RateLimitError as e:
             response = getattr(e, "response", None)

@@ -16,8 +16,11 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from scripttuner.data_sources import ami as ami_ds
 from scripttuner.data_sources import sbcsae
 from scripttuner.data_sources import switchboard as switchboard_ds
+from scripttuner.preprocessing.ami import cleaner as ami_cleaner
+from scripttuner.preprocessing.ami import parser as ami_parser
 from scripttuner.preprocessing.chat import cleaner as chat_cleaner
 from scripttuner.preprocessing.chat import parser as chat_parser
 from scripttuner.preprocessing.ir import Utterance
@@ -68,6 +71,13 @@ _SWITCHBOARD_BACKCHANNEL_WORDS: frozenset[str] = DEFAULT_BACKCHANNEL_WORDS | fro
 
 
 REGISTRY: dict[str, Adapter] = {
+    "ami": Adapter(
+        source_name=ami_ds.SOURCE_NAME,
+        download=ami_ds.download,
+        enumerate_stems=ami_parser.enumerate_stems,
+        parse_stem=ami_parser.parse_stem,
+        clean=ami_cleaner.clean,
+    ),
     "sbcsae": Adapter(
         source_name=sbcsae.SOURCE_NAME,
         download=sbcsae.download,

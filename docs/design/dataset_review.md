@@ -38,7 +38,7 @@
 |---|---|---|---|
 | 1 | SBCSAE 60개 전체 | 메인 구어 코퍼스 (Casual) | TalkBank/OpenSLR, CHA 포맷 동일 → 파이프라인 재사용 |
 | 2 | Switchboard / CallHome / BNC Spoken | 대규모 구어 보강 | 도메인 다양성 확보 |
-| 3 | TED 스크립트, 인터뷰 대본, 팟캐스트 전사 | **monologue** 보강 (Semi-formal 후보) | OPIc의 1인 장시간 발화 구조와 매칭 |
+| 3 | AMI + ICSI Meeting (CC BY 4.0), 차순위 MICASE | **Semi-formal** monologue 보강 (cf. [ADR-0013](../decisions/0013-semi-formal-data-sourcing.md)) | 즉흥+격식절제 회의/학술구어. **scripted(TED 등) 배제** — "대본 읽는 느낌"은 제거 대상이지 학습 목표가 아님 |
 | 4 | 상용 LLM 활용 역변환 | (문어체, 구어체) 페어 생성 | 제안서 명시 방식 |
 
 ### 스타일 레이블링

@@ -37,7 +37,15 @@
 ## 다음 액션 (단기)
 
 1. 보고서/발표 준비 — 집계 산출물은 `report/`에 정리됨([metrics_summary.md](../report/metrics_summary.md) = 1-epoch vs 조기종료 비교, training_curves.png, samples.md). 실제 보고서·발표 문서 작성 남음.
-2. Semi-formal 두 번째 학습 사이클 (조달 방안 결정됨, cf. [ADR-0013](decisions/0013-semi-formal-data-sourcing.md)) — 착수 전 선행: ⓐ casual vs semi_formal **스타일 분리도 메트릭** 정의, ⓑ AMI+ICSI **NXT 어댑터**(ADR-0011 인터페이스) 구현, ⓒ 모놀로그 재조립(ADR-0009 패턴) → ④ pairs → split/format → 재학습. (MICASE는 라이선스 현행 확인 후 2차 보강)
+2. Semi-formal 두 번째 학습 사이클 (조달 방안 결정됨, cf. [ADR-0013](decisions/0013-semi-formal-data-sourcing.md)) — 데이터 준비까지 완료, **전량 pairs→학습이 남음**:
+   - ⓐ 스타일 분리도 메트릭 ✅(`training/style_separation.py`, Cohen's d·collapse 판정; pause/tokens는 판정 제외=코퍼스 아티팩트). **주의**: monologue 원문 비교는 표기관습이 섞여 신호 왜곡 → 진짜 판정은 U6의 *동일 입력 paired 생성* 출력으로.
+   - ⓑ AMI NXT 어댑터+다운로더+cleaner ✅(`download/run ami`, 171회의·8,920 monologue·636k토큰; segments 단위·speaker=global_name·철자표기 `T_V_→TV` 복원). ADR-0012(`word .`/쉼표)는 AMI(NXT)엔 비해당 — 표기관습이 달라 이미 깨끗.
+   - ⓒ 모놀로그 재조립 ✅(monologue.py 무변경 재사용).
+   - ⓓ 샘플러 ✅(`scripttuner sample ami`, casual과 스케일매치 ~2,055; scenario:nonscenario=1:1, 화자단위 누수방지; `data/monologues_sampled/`).
+   - ⓔ pairs PoC ✅(7쌍, `--style semi_formal`, 동일모델 gpt-oss-120b:free, 품질·비용≈0 확인).
+   - ⓕ `pairs --all --monologues-subdir` + rate-limit 재시도 일반화 ✅(`llm/rate_limit.py`의 `RateLimitRetryClient`를 모든 provider에 적용; max_retries 반복). + OpenRouter provider 라우팅(`LLM_PROVIDER_SORT=price`, `MAX_PROMPT/COMPLETION`)으로 저가 provider 한정 — Groq 무료 TPM 8k가 너무 낮아 OpenRouter 유료 저가(prompt≤0.2/compl≤0.4 $/M, gpt-oss-120b)로 전환.
+   - ⓖ 전량 pairs ✅(**2,055/114 stem, skip 0, 429 0**) → aggregate ✅(2,055) → split ✅(train 1,636/val 209/test 210, 화자 47명, 누수 0) → format t5gemma2-1b ✅(styles=[semi_formal]).
+   - **남음**: 2차 학습(`train t5gemma2-1b ami`, 8GB GPU) → generate → U4 메트릭으로 분리도 판정(*paired generation*·pause 제외). ICSI(동일 NXT)는 필요시 보강. MICASE는 라이선스 현행 확인 후 2차 보강. ※ AMI 다운로더는 공식 v1.6.2(CC BY 4.0); OpenSLR 미러 v1.6.1은 구 라이선스(CC BY-NC-SA 2.5) 동봉.
 3. (선택) Switchboard ④ LLM pairs → SBCSAE와 `aggregate` 합산해 학습 데이터 확장 (비용 발생).
 4. 학습 target 구두점 정규화 (모델 피드백 대응, cf. ADR-0012):
    - **Tier A (코드 완료)** — (a) `' .'→'.'`·중복 종결 정리(`text_normalize.normalize_punctuation`, ④ target + generate 출력), (b) cleaner 마커 제거 보강(`[% laugh]`/`&{n=…}`/`XX`/밑줄). 검증: `' .'` 23,698→0, 마커 raw 616→0(X-rays 7 보존). **pairs 재생성 → 재학습 대기**.

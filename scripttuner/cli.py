@@ -6,6 +6,7 @@
     uv run scripttuner parse sbcsae SBC016
     uv run scripttuner clean sbcsae SBC016
     uv run scripttuner monologue sbcsae SBC016
+    uv run scripttuner sample ami --target 2000 --seed 42
     uv run scripttuner pairs sbcsae SBC016 --model deepseek/deepseek-v4-flash
     uv run scripttuner run switchboard --all --through monologue
     uv run scripttuner --help
@@ -19,13 +20,13 @@ import argparse
 import json
 import os
 import sys
+from collections import defaultdict
 from pathlib import Path
 
 from dotenv import load_dotenv
 
 from scripttuner.corpora import REGISTRY
-from scripttuner.llm.openai_compatible import OpenAICompatibleClient
-from scripttuner.llm.openrouter import OpenRouterClient
+from scripttuner.llm.rate_limit import RateLimitRetryClient
 from scripttuner.persistence.jsonl import read_jsonl, write_jsonl
 from scripttuner.preprocessing.ir import Monologue, Pair, Utterance
 from scripttuner.preprocessing.monologue import DEFAULT_MIN_TOKENS, build_monologues
@@ -37,6 +38,8 @@ from scripttuner.preprocessing.pairs import (
 from scripttuner.preprocessing.stats import compute_stats
 from scripttuner.training.formatters import format_split_folder
 from scripttuner.training.registry import MODEL_KEYS
+from scripttuner.training.sample import sample_balanced
+from scripttuner.training.sample import stem_of as sample_stem_of
 from scripttuner.training.split import split_by_speaker, write_split_files
 
 DEFAULT_DATASETS_DIR = Path("datasets")
@@ -118,7 +121,20 @@ def _build_parser() -> argparse.ArgumentParser:
     pa.add_argument(
         "corpus", choices=sorted(REGISTRY), help="Corpus name (resolves source dir)."
     )
-    pa.add_argument("stem", help="File stem (e.g. SBC016).")
+    pa.add_argument(
+        "stem",
+        nargs="?",
+        help="File stem (e.g. SBC016). Omit when using --all.",
+    )
+    pa.add_argument(
+        "--all",
+        dest="all_stems",
+        action="store_true",
+        help=(
+            "Process every monologue stem under the input subdir "
+            "(<data-dir>/<monologues-subdir>/<SOURCE>/), reusing one LLM client."
+        ),
+    )
     pa.add_argument(
         "--model",
         default=os.environ.get("LLM_MODEL"),
@@ -151,6 +167,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help=f"Base data directory (default: {DEFAULT_DATA_DIR}).",
     )
     pa.add_argument(
+        "--monologues-subdir",
+        default="monologues",
+        help=(
+            "Input monologue subdir under <data-dir> (default: monologues). "
+            "Use 'monologues_sampled' to run pairs over a `sample` subset."
+        ),
+    )
+    pa.add_argument(
         "--cache-dir",
         type=Path,
         default=None,
@@ -177,6 +201,47 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="Process only the first N monologues (default: all).",
+    )
+    pa.add_argument(
+        "--repunct",
+        action="store_true",
+        help=(
+            "Apply Tier-B re-punctuation (commas/question marks) to the spoken "
+            "side using the same model (cf. ADR-0012). Formal side and its cache "
+            "are unaffected. Invariant failures fall back to Tier-A text."
+        ),
+    )
+
+    sm = subparsers.add_parser(
+        "sample",
+        help=(
+            "Speaker-aware, meeting-type-balanced subsample of monologues "
+            "(scale-match to casual; cf. ADR-0013)."
+        ),
+    )
+    sm.add_argument("corpus", choices=sorted(REGISTRY), help="Corpus name.")
+    sm.add_argument(
+        "--target",
+        type=int,
+        default=2000,
+        help="Target monologue count (split 1:1 across meeting types; default: 2000).",
+    )
+    sm.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Speaker-shuffle seed for reproducibility (default: 42).",
+    )
+    sm.add_argument(
+        "--data-dir",
+        type=Path,
+        default=DEFAULT_DATA_DIR,
+        help=f"Base data directory (default: {DEFAULT_DATA_DIR}).",
+    )
+    sm.add_argument(
+        "--output-subdir",
+        default="monologues_sampled",
+        help="Output subdir under <data-dir> (default: monologues_sampled).",
     )
 
     st = subparsers.add_parser(
@@ -314,6 +379,13 @@ def _build_parser() -> argparse.ArgumentParser:
     tr.add_argument("--grad-accum", type=int, default=4)
     tr.add_argument("--learning-rate", type=float, default=2e-4)
     tr.add_argument("--seed", type=int, default=42)
+    tr.add_argument(
+        "--gradient-checkpointing",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Recompute activations to save VRAM (default: on). "
+        "Use --no-gradient-checkpointing to trade VRAM for ~20-30%% speed when memory allows.",
+    )
 
     gn = subparsers.add_parser(
         "generate",
@@ -504,21 +576,43 @@ def _run_monologue(args: argparse.Namespace) -> int:
     return 0
 
 
-def _build_llm_client(
-    model: str, max_retries: int
-) -> OpenAICompatibleClient | OpenRouterClient:
-    """Pick an LLM client based on the configured base URL.
+def _provider_routing_from_env() -> dict[str, Any] | None:
+    """Build OpenRouter provider-routing prefs from env vars, or None.
 
-    OpenRouter free-tier models need header-aware RPM-cap recovery that the SDK
-    does not provide; we auto-route to `OpenRouterClient` when the configured
-    base URL points at openrouter.ai. Any other endpoint (OpenAI, Together,
-    Groq, local vLLM, etc.) keeps the plain `OpenAICompatibleClient` with the
-    SDK's built-in retry semantics.
+    - ``LLM_PROVIDER_SORT``        → provider.sort (e.g. "price")
+    - ``LLM_PROVIDER_MAX_PROMPT``  → provider.max_price.prompt  ($/M input tokens)
+    - ``LLM_PROVIDER_MAX_COMPLETION`` → provider.max_price.completion ($/M output)
+
+    Ignored by non-OpenRouter endpoints. Returns None when none are set so the
+    request body stays clean.
     """
-    base_url = os.environ.get("OPENAI_BASE_URL", "")
-    if "openrouter.ai" in base_url:
-        return OpenRouterClient(model=model)
-    return OpenAICompatibleClient(model=model, max_retries=max_retries)
+    provider: dict[str, Any] = {}
+    sort = os.environ.get("LLM_PROVIDER_SORT")
+    if sort:
+        provider["sort"] = sort
+    max_price: dict[str, float] = {}
+    if (p := os.environ.get("LLM_PROVIDER_MAX_PROMPT")) is not None:
+        max_price["prompt"] = float(p)
+    if (c := os.environ.get("LLM_PROVIDER_MAX_COMPLETION")) is not None:
+        max_price["completion"] = float(c)
+    if max_price:
+        provider["max_price"] = max_price
+    return provider or None
+
+
+def _build_llm_client(model: str, max_retries: int) -> RateLimitRetryClient:
+    """Build the LLM client.
+
+    All free-tier OpenAI-compatible endpoints (OpenRouter, Groq, …) hit
+    per-minute caps that the SDK's 8s-capped backoff cannot span, so every
+    provider gets the RPM-cap-aware `RateLimitRetryClient` (sleeps to the
+    Retry-After / 60s window, then one retry). ``max_retries`` is unused now;
+    the wrapper owns retry policy and disables the SDK's internal loop.
+
+    OpenRouter provider routing (cheapest-provider selection) is read from env
+    via `_provider_routing_from_env` and passed through to the request body.
+    """
+    return RateLimitRetryClient(model=model, provider=_provider_routing_from_env())
 
 
 def _run_pairs(args: argparse.Namespace) -> int:
@@ -529,10 +623,25 @@ def _run_pairs(args: argparse.Namespace) -> int:
         )
         return 2
     source = _source_name(args.corpus)
-    in_path = args.data_dir / "monologues" / source / f"{args.stem}.jsonl"
-    monologues = read_jsonl(in_path, Monologue)
-    if args.limit is not None:
-        monologues = monologues[: args.limit]
+    subdir = getattr(args, "monologues_subdir", "monologues")
+    mono_dir = args.data_dir / subdir / source
+
+    all_stems = getattr(args, "all_stems", False)
+    if all_stems:
+        if getattr(args, "stem", None):
+            print("error: provide a stem OR --all, not both.", file=sys.stderr)
+            return 2
+        stems = sorted(
+            p.stem for p in mono_dir.glob("*.jsonl") if not p.name.startswith("_")
+        )
+        if not stems:
+            print(f"error: no monologue jsonls under {mono_dir}", file=sys.stderr)
+            return 1
+    else:
+        if not getattr(args, "stem", None):
+            print("error: provide a stem or use --all.", file=sys.stderr)
+            return 2
+        stems = [args.stem]
 
     cache_dir: Path | None
     if args.no_cache:
@@ -540,21 +649,93 @@ def _run_pairs(args: argparse.Namespace) -> int:
     else:
         cache_dir = args.cache_dir or (args.data_dir / "cache" / "pairs")
 
+    # Build the client(s) once and reuse across all stems.
     client = _build_llm_client(args.model, args.max_retries)
-    pairs = convert_to_formal(
-        monologues,
-        client=client,
-        model=args.model,
-        model_alias=args.model_alias,
-        cache_dir=cache_dir,
-        prompt_version=args.prompt_version,
-        style=args.style,
-        progress=not args.no_progress,
+    repunct_client = None
+    repunct_cache_dir = None
+    if getattr(args, "repunct", False):
+        repunct_client = _build_llm_client(args.model, args.max_retries)
+        # repunct 캐시는 formal과 별도 디렉토리 (--cache-dir은 formal 전용).
+        repunct_cache_dir = None if args.no_cache else (args.data_dir / "cache" / "repunct")
+
+    total = 0
+    for stem in stems:
+        monologues = read_jsonl(mono_dir / f"{stem}.jsonl", Monologue)
+        if args.limit is not None:
+            monologues = monologues[: args.limit]
+        pairs = convert_to_formal(
+            monologues,
+            client=client,
+            model=args.model,
+            model_alias=args.model_alias,
+            cache_dir=cache_dir,
+            prompt_version=args.prompt_version,
+            style=args.style,
+            progress=not args.no_progress,
+            repunct_client=repunct_client,
+            repunct_cache_dir=repunct_cache_dir,
+        )
+        out_path = args.data_dir / "pairs" / source / f"{stem}.jsonl"
+        n = write_jsonl(out_path, pairs)
+        total += n
+        skipped = len(monologues) - n
+        print(f"OK: wrote {n} pairs to {out_path} ({skipped} skipped)")
+    if all_stems:
+        print(f"[pairs] summary: {len(stems)} stems, {total} pairs", file=sys.stderr)
+    return 0
+
+
+def _meeting_type_map(parsed_dir: Path) -> dict[str, str]:
+    """stem -> meeting_type, read from the first row of each parsed JSONL.
+
+    Monologue records drop per-utterance metadata, so the scenario/nonscenario
+    label is recovered from the parsed stage (cf. AMI parser metadata).
+    """
+    mapping: dict[str, str] = {}
+    for path in parsed_dir.glob("*.jsonl"):
+        for u in read_jsonl(path, Utterance):
+            mapping[path.stem] = str(u.metadata.get("meeting_type", "unknown"))
+            break
+    return mapping
+
+
+def _run_sample(args: argparse.Namespace) -> int:
+    source = _source_name(args.corpus)
+    mono_dir = args.data_dir / "monologues" / source
+    if not mono_dir.is_dir():
+        print(f"error: monologues dir not found: {mono_dir}", file=sys.stderr)
+        return 1
+
+    monologues: list[Monologue] = []
+    for path in sorted(mono_dir.glob("*.jsonl")):
+        if path.name.startswith("_"):
+            continue
+        monologues.extend(read_jsonl(path, Monologue))
+    if not monologues:
+        print(f"error: no monologues under {mono_dir}", file=sys.stderr)
+        return 1
+
+    type_map = _meeting_type_map(args.data_dir / "parsed" / source)
+    selected = sample_balanced(
+        monologues, type_map, target=args.target, seed=args.seed
     )
-    out_path = args.data_dir / "pairs" / source / f"{args.stem}.jsonl"
-    n = write_jsonl(out_path, pairs)
-    skipped = len(monologues) - n
-    print(f"OK: wrote {n} pairs to {out_path} ({skipped} skipped)")
+
+    # Re-split selected monologues back into per-stem files (stem-centric contract).
+    by_stem: dict[str, list[Monologue]] = defaultdict(list)
+    for m in selected:
+        by_stem[sample_stem_of(m.monologue_id)].append(m)
+    out_dir = args.data_dir / args.output_subdir / source
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for stem, monos in sorted(by_stem.items()):
+        write_jsonl(out_dir / f"{stem}.jsonl", monos)
+
+    type_counts: dict[str, int] = defaultdict(int)
+    for m in selected:
+        type_counts[type_map.get(sample_stem_of(m.monologue_id), "unknown")] += 1
+    print(
+        f"OK: sampled {len(selected)} monologues "
+        f"({dict(type_counts)}) across {len(by_stem)} stems to {out_dir}"
+    )
     return 0
 
 
@@ -674,6 +855,7 @@ def _run_train(args: argparse.Namespace) -> int:
         grad_accum=args.grad_accum,
         learning_rate=args.learning_rate,
         seed=args.seed,
+        gradient_checkpointing=args.gradient_checkpointing,
     )
     print(f"OK: trained {args.model_key} -> {output_dir} (adapter: {manifest['adapter_dir']})")
     return 0
@@ -842,6 +1024,7 @@ _COMMANDS = {
     "parse": _run_parse,
     "clean": _run_clean,
     "monologue": _run_monologue,
+    "sample": _run_sample,
     "pairs": _run_pairs,
     "stats": _run_stats,
     "aggregate": _run_aggregate,
