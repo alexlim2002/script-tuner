@@ -56,4 +56,3 @@ Switchboard 어댑터는 A/B 두 파일을 **`t_start_ms` 기준 단일 시간�
 - [ADR-0003](0003-pause-marker-tokenization.md), [ADR-0004](0004-backchannel-handling.md), [ADR-0006](0006-adapter-structure-and-common-ir.md)
 - [ADR-0010](0010-switchboard-license-policy.md) — Switchboard 라이선스
 - `scripttuner/preprocessing/monologue.py` — 재사용 대상 ③ 모듈
-- `.work/switchboard-poc/analyze.py` — PoC 포맷·마커·수율 측정(휘발성)
