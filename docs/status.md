@@ -2,7 +2,7 @@
 
 > 본 문서는 **상태 추적용**이다. 일상적으로 업데이트한다. 정적 설계는 `docs/design/`, 결정 이력은 `docs/decisions/`(ADR), 거친 작업 메모는 `.work/`(gitignore)에 둔다.
 
-마지막 업데이트: 2026-05-30
+마지막 업데이트: 2026-05-31
 
 ---
 
@@ -36,7 +36,7 @@
 
 ## 다음 액션 (단기)
 
-1. 보고서/발표 준비 — 집계 산출물은 `report/`에 정리됨([metrics_summary.md](../report/metrics_summary.md) = 1-epoch vs 조기종료 비교, training_curves.png, samples.md). 실제 보고서·발표 문서 작성 남음.
+1. 보고서/발표 준비 — 집계 산출물은 `report/`에 정리됨([metrics_summary.md](../report/metrics_summary.md) = repunct before/after + 학습길이 방법론 노트, training_curves.png, [samples.md](../report/samples.md) = es vs repunct 정성 쌍). 실제 보고서·발표 문서 작성 남음.
 2. Semi-formal 두 번째 학습 사이클 (조달 방안 결정됨, cf. [ADR-0013](decisions/0013-semi-formal-data-sourcing.md)) — 데이터 준비까지 완료, **전량 pairs→학습이 남음**:
    - ⓐ 스타일 분리도 메트릭 ✅(`training/style_separation.py`, Cohen's d·collapse 판정; pause/tokens는 판정 제외=코퍼스 아티팩트). **주의**: monologue 원문 비교는 표기관습이 섞여 신호 왜곡 → 진짜 판정은 U6의 *동일 입력 paired 생성* 출력으로.
    - ⓑ AMI NXT 어댑터+다운로더+cleaner ✅(`download/run ami`, 171회의·8,920 monologue·636k토큰; segments 단위·speaker=global_name·철자표기 `T_V_→TV` 복원). ADR-0012(`word .`/쉼표)는 AMI(NXT)엔 비해당 — 표기관습이 달라 이미 깨끗.
@@ -49,7 +49,7 @@
 3. (선택) Switchboard ④ LLM pairs → SBCSAE와 `aggregate` 합산해 학습 데이터 확장 (비용 발생).
 4. 학습 target 구두점 정규화 (모델 피드백 대응, cf. ADR-0012):
    - **Tier A (코드 완료)** — (a) `' .'→'.'`·중복 종결 정리(`text_normalize.normalize_punctuation`, ④ target + generate 출력), (b) cleaner 마커 제거 보강(`[% laugh]`/`&{n=…}`/`XX`/밑줄). 검증: `' .'` 23,698→0, 마커 raw 616→0(X-rays 7 보존). **pairs 재생성 → 재학습 대기**.
-   - **Tier B (PoC 통과 → 본 적용 대기)** — 쉼표·`?` 재구두점(방식 A: 자유생성+토큰검증, 깨지면 Tier A 폴백). 59쌍 PoC: 실제 단어변경 ~14%(전부 폴백), 품질 양호, `!`는 미채택. 본 구현 남음: 전량 재구두점 → pause 인덱스 재삽입 → pairs/split/formatted 재생성 → 1회 재학습. LLM은 OpenRouter 1차 / Groq 2차.
+   - **Tier B (완료·검증됨 ✅)** — 쉼표·`?` 재구두점(방식 A: 자유생성+토큰검증, 깨지면 Tier A 폴백, `!` 미채택). 전량 재구두점 → pause 재삽입 → pairs/split/formatted 재생성 → Kaggle T4에서 재학습(`t5gemma2-1b-SBCSAE-lora-repunct`, 어댑터 HF private push). **결과: 쉼표 0→4.35/item(ref 3.73), `' .'` 4.41→0, 구어성(filler/pause/length) 회귀 없음** — `-es`(동일 8ep, 데이터만 다름)와 단일변수 비교. 상세 [report/metrics_summary.md](../report/metrics_summary.md). LLM은 OpenRouter 1차 / Groq 2차.
    - 문법 교정(피드백 3·4)은 스코프 밖 — "입력은 문법적 정상" 전제, L2 강건성은 보류 항목.
 
 ## 보류 / 추후 결정

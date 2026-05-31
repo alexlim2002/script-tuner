@@ -1,37 +1,51 @@
-# 정성 샘플 — formal → casual spoken 변환
+# 정성 샘플 — 재구두점 before/after
 
-`t5gemma2-1b-SBCSAE-lora-es`(조기종료판) 모델의 test split 예측 일부.
+직전 baseline `t5gemma2-1b-SBCSAE-lora-es`(Tier-A target)와 최종
+`t5gemma2-1b-SBCSAE-lora-repunct`(재구두점 target)의 **동일 입력**에 대한 test split 예측.
+두 모델은 학습 길이·하이퍼파라미터가 같고 **target 데이터만 다르다** → 차이는 재구두점 효과.
 
 - **입력(formal)**: 파이프라인 `pairs` 단계에서 LLM이 생성한 문어체 문장
-- **출력(prediction)**: 본 모델이 변환한 구어체
+- **BEFORE**: `-es` 예측 / **AFTER**: repunct 예측
 - 표기: `<pause:short>` / `<pause:long>`은 발화 휴지(쉼) 마커
 - ⚠️ 참조(reference, SBCSAE 원문 발화)는 라이선스(CC BY-ND)상 본 문서에서 생략.
   분포 비교는 [`metrics_summary.md`](metrics_summary.md) 참조.
 
+각 예시에서 BEFORE의 ① 마침표 앞 공백(`' .'`), ② 쉼표 부재를 확인하고,
+AFTER에서 둘 다 교정되며 절 경계에 쉼표가 자연스럽게 들어가는지 본다.
+
 ---
 
 **1.**
-> **입력:** We will not test them. So I had Bill come over with his Leatherman tool, or whatever it is. A few minutes later he had it undone.
+> **입력:** Cause, instead of just sitting in the class and getting five dollars an hour, I was now going to be up there teaching it. And instead of getting five dollars an hour, I ended up getting fifteen.
 >
-> **출력:** `<pause:short>` We won't test them . `<pause:short>` So I had Bill come over with his Leatherman tool or whatever it is . `<pause:long>` A few minutes later he had it undone .
+> **BEFORE:** cause instead of just like sitting in the class and get like five dollars an hour I was now gonna be up there teaching it `.` And instead of getting five dollars an hour I ended up getting fifteen `.`
+>
+> **AFTER:** Cause, `<pause:short>` um, instead of `<pause:short>` just sitting in the class and getting five dollars an hour, `<pause:short>` I was now `<pause:short>` gonna be up there teaching it, and instead of getting five dollars an hour, I ended up getting fifteen.
 
 **2.**
-> **입력:** There's a big bottle of it down in that bottle rack thing. That's already open and I drank out of it, so you can just give me that.
+> **입력:** And it's lovely. The people are sweet and nice; they're little, they're dark, they all wear white, and the city is quite nice. It's a very manageable size, Merida.
 >
-> **출력:** There's a big bottle of it down in that bottle rack thing . That's already open and I drank out of it so . `<pause:short>` You can just give me that .
+> **BEFORE:** `<pause:long>` And it's lovely `.` `<pause:long>` the people are sweet and nice `<pause:short>` they're little they're dark they all wear white `<pause:short>` and the city is quite nice `.` It's a very manageable size Merida `.`
+>
+> **AFTER:** And it's lovely. `<pause:short>` The people are sweet and nice, they're little, they're dark, `<pause:long>` they all wear white, and the city is quite nice. `<pause:short>` It's a very manageable size, Merida.
 
 **3.**
-> **입력:** And they come up to me, Miss Flinn, Miss Flinn, and I'd walk over by the rules, I'd point to number two, and I'd just look at them.
+> **입력:** I remember hearing some guys complaining years ago, when we first moved here, that they call it Twin Cities, but they let all these people come in and take over all the first chairs and all this stuff.
 >
-> **출력:** and they come up to me miss flinn miss flinn and I'd `<pause:long>` walk over `<pause:long>` by the rules and I'd point to number two and I'd just look at em .
+> **BEFORE:** I remember hearing some guys complaining years ago when we first moved here that they call it Twin Cities but they let all these people come in and take over all the first chairs and all this stuff `.`
+>
+> **AFTER:** I remember hearing some guys complain, years ago `<pause:long>` when we first moved here, that they call it Twin Cities, but they let all these people come in and take over all the first chairs and all this stuff.
 
-**4.**
-> **입력:** They're right by the gate. Everyone- even one or two of them. I said I'll advise if the left becomes available, and they said...
+**4.** (물음표 복원 예)
+> **입력:** And I'll tell them, "Alright, sit down." You know, I had to get really tough in the last week. The first week I played with them all week long, which was really stupid because they got worked up.
 >
-> **출력:** they're right by the gate . `<pause:long>` Everyone even one or two of em I said I'll advise if the left becomes available and they said ...
+> **BEFORE:** and I'll tell em alright sit down `.` `<pause:long>` You know I had to get really tough in the last week `.` The first week I played with em all week long which was really stupid cause they got worked up `.`
+>
+> **AFTER:** And I'll tell them, okay, sit down, you know, and I had to get really tough in the last week, I had, `<pause:long>` like the first week I played with them all week long? Which was `<pause:short>` was real stupid because they got worked up.
 
 ---
 
-관찰: 격식체의 "will not"→"won't", "them"→"em" 같은 축약, 휴지 마커 삽입,
-대문자·구두점 완화 등 구어 특징이 반영된다. 4번처럼 입력이 끊긴 경우 출력도
-끊긴 채로 따라가는 경향이 있다.
+관찰: BEFORE는 마침표 앞 공백(`' .'`)이 남고 쉼표가 전혀 없어 절을 마침표로 끊거나
+이어붙인다. AFTER는 공백 아티팩트가 사라지고 절 경계에 쉼표가 들어가 사람 발화의
+호흡에 가까워진다(4번은 `?`까지 복원). 동시에 `gonna`·`em`/`them` 축약, filler·pause
+같은 구어 특징은 그대로 유지된다 — 구두점만 고치고 구어성은 보존.

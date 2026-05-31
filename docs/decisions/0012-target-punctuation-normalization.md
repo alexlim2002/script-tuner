@@ -2,7 +2,7 @@
 
 ## 상태
 
-채택 (2026-05-30)
+채택 (2026-05-30) · Tier A·B 구현·검증 완료 (2026-05-31)
 
 ## 맥락
 
@@ -50,14 +50,14 @@
 
 → 피드백 1번 완전 해결. 2번의 "온점화"(`. .`)는 완화.
 
-### 2. Tier B — 재구두점 (쉼표·`?` 복원) (구현안 1, PoC 통과 → 본 적용)
+### 2. Tier B — 재구두점 (쉼표·`?` 복원) (구현안 1 — 구현·검증 완료)
 
 > 용어: **Tier A/B**는 *무엇을* 고치냐(범위), **구현안 1/2**는 Tier B를 *어떻게*
 > 구현하냐다. 혼동을 피하려고 이전의 "방식 A/B"를 "구현안 1/2"로 개명한다.
 > - 구현안 1 = 자유생성 + 사후 토큰검증 (채택)
 > - 구현안 2 = 토큰 정렬 강제 (미채택: 긴 입력에서 LLM 슬롯 라벨링이 자주 깨짐)
 
-쉼표·`?`는 전사 신호에 **없으므로** 정제가 아니라 *생성*이 필요하다. **방식 A
+쉼표·`?`는 전사 신호에 **없으므로** 정제가 아니라 *생성*이 필요하다. **구현안 1
 (자유생성 + 사후 토큰검증)**: 제약 LLM에 "구두점·대소문자만 삽입, 단어 불변"을
 지시 → 출력의 단어열이 입력과 동일한지 검증(불변식). 깨지면 그 pair는 **Tier A로
 폴백**(데이터 손실 0). 재구두점은 **target(`spoken_text`)에만** 적용하고 ④ LLM
@@ -84,7 +84,7 @@
 주원인은 프롬프트가 아니라 위 전사 마커 잔존(이번에 cleaner에서 해소)과 검증기 과민
 (표기차)이었다.
 
-PoC 산출물: `.work/target-punctuation/` (repunct_poc.py, *_report.md, *_raw.jsonl).
+검증 결과(부호 before/after·구어성 회귀)는 [`report/metrics_summary.md`](../../report/metrics_summary.md).
 
 ### 3. 문법 교정 (피드백 3·4) — 스코프 밖
 
@@ -99,4 +99,7 @@ PoC 산출물: `.work/target-punctuation/` (repunct_poc.py, *_report.md, *_raw.j
 - **장점**: 피드백 1번이 학습·추론 양쪽에서 결정론적으로 해결. 정규화 로직 단일 출처.
 - **비용**: Tier A를 cleaner에 넣으면 ④ 캐시 키(`make_cache_key(prompt_version, model, pause_strip(spoken))`, `pairs.py`)가 바뀌어 재호출이 발생한다. 현 생성 모델이 `openai/gpt-oss-120b:free`라 금전 비용은 ~0 (시간·레이트리밋만).
 - **한계**: Tier A만으로는 쉼표 과소사용(피드백 2번 일부)이 남는다 → Tier B에서 해결.
+- **검증**: Tier B 적용 모델(`-repunct`)이 동일 config baseline(`-es`) 대비 피드백 1·2를
+  해소(쉼표 복원·`' .'` 제거)하고 구어성(filler/pause/length) 회귀 없음을 확인 — 상세
+  [`report/metrics_summary.md`](../../report/metrics_summary.md).
 - **후속**: 기존 `pairs.py:_normalize_typography`(스마트 따옴표→ASCII)도 동일 공유 모듈로 통합 가능(선택, 별도 정리).
