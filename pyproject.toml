@@ -22,6 +22,7 @@ dev = [
     "ruff>=0.6",
     "mypy>=1.11",
     "types-tqdm>=4.66",
+    "kaggle>=2.2.0",
 ]
 # Local QLoRA fine-tuning stack. Unsloth wraps transformers/peft/trl/bitsandbytes/accelerate.
 # Heavy + GPU/CUDA-specific, so it is kept out of the core deps. Install with:
