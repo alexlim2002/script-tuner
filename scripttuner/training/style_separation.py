@@ -7,11 +7,16 @@
 ⑤ stats의 per-text 피처 추출기를 재사용하며 의존성 추가 없음(POS는 옵션).
 
 피처(텍스트당, 길이 정규화):
-  - filler_rate        = fillers / tokens            # casual↑
-  - pause_rate         = (pause_short+long) / tokens  # casual만 발생(AMI엔 pause 없음)
-  - phrasal_verb_ratio (POS)                          # casual↑
-  - lexical_density    (POS)                          # semi_formal↑
-  - tokens             (길이)                          # 방향 미지정
+  - filler_rate         = fillers / tokens            # casual↑
+  - pause_rate          = (pause_short+long) / tokens  # casual만 발생(AMI엔 pause 없음)
+  - tokens_per_sentence = tokens / 문장수              # semi_formal↑ (절을 길게 이어붙임)
+  - phrasal_verb_ratio  (POS)                          # casual↑
+  - lexical_density     (POS)                          # semi_formal↑
+  - tokens              (길이)                          # 방향 미지정
+
+분절(tokens_per_sentence)이 두 스타일의 핵심 분리 축이다 — casual은 짧게 토막,
+semi_formal은 절을 길게 이어붙인다. filler/lexical/phrasal만으로는 이 "발화 리듬"
+차이를 못 잡으므로 verdict에 포함한다.
 
 분리도: 두 스타일 그룹 간 표준화 평균차(Cohen's d) = (semi_formal_mean -
 casual_mean) / pooled_sd. 부호로 관측 방향을 얻어 기대 방향과 대조한다. 모든
@@ -26,6 +31,8 @@ from __future__ import annotations
 import statistics
 from typing import Any
 
+import re
+
 from scripttuner.preprocessing.stats import (
     _PAUSE_LONG_RE,
     _PAUSE_SHORT_RE,
@@ -33,14 +40,18 @@ from scripttuner.preprocessing.stats import (
     _word_tokens,
 )
 
+# 문장 종결 부호. 분절(문장 수) 추정용.
+_SENT_END_RE = re.compile(r"[.!?]+")
+
 # |d| < 이 값이면 사실상 분리 없음(collapse). 0.2 = "small effect" 하한.
 COLLAPSE_THRESHOLD = 0.2
 
-# collapse 판정에 쓰는 피처(register 본질). pause_rate는 코퍼스 표기 아티팩트라
-# (NXT/AMI는 pause 미표기) 기본 판정에서 제외 — 전체 d는 features에 그대로 리포트한다.
-# tokens는 길이 차라 register 신호가 아니라 판정 제외.
+# collapse 판정에 쓰는 피처(register/발화스타일 본질). pause_rate는 코퍼스 표기
+# 아티팩트라(NXT/AMI는 pause 미표기) 기본 판정에서 제외 — 전체 d는 features에 그대로
+# 리포트한다. tokens는 길이 차라 제외. tokens_per_sentence는 표기 아티팩트가 아닌
+# 실제 분절 스타일이라 판정에 포함(POS 불필요해 항상 산출).
 DEFAULT_VERDICT_FEATURES: frozenset[str] = frozenset(
-    {"filler_rate", "phrasal_verb_ratio", "lexical_density"}
+    {"filler_rate", "tokens_per_sentence", "phrasal_verb_ratio", "lexical_density"}
 )
 
 # 각 피처에서 casual이 더 높을 것으로 기대(True) / semi_formal이 더 높을 것(False).
@@ -48,6 +59,7 @@ DEFAULT_VERDICT_FEATURES: frozenset[str] = frozenset(
 _CASUAL_HIGHER: dict[str, bool | None] = {
     "filler_rate": True,
     "pause_rate": True,
+    "tokens_per_sentence": False,  # semi_formal이 절을 길게 이어붙임
     "phrasal_verb_ratio": True,
     "lexical_density": False,
     "tokens": None,
@@ -55,21 +67,30 @@ _CASUAL_HIGHER: dict[str, bool | None] = {
 
 
 def _surface_features(text: str) -> dict[str, float]:
-    """POS 불필요한 표면 피처 (filler_rate, pause_rate, tokens)."""
+    """POS 불필요한 표면 피처 (filler_rate, pause_rate, tokens, tokens_per_sentence)."""
     tokens = _word_tokens(text)
     n = len(tokens)
     fillers = _count_fillers(tokens)
     pauses = len(_PAUSE_SHORT_RE.findall(text)) + len(_PAUSE_LONG_RE.findall(text))
+    # 문장 수: pause 토큰 제거 후 종결부호 단위 (빈 조각 제외). 최소 1.
+    bare = _PAUSE_SHORT_RE.sub(" ", _PAUSE_LONG_RE.sub(" ", text))
+    n_sent = sum(1 for s in _SENT_END_RE.split(bare) if s.strip()) or 1
     return {
         "tokens": float(n),
         "filler_rate": (fillers / n) if n else 0.0,
         "pause_rate": (pauses / n) if n else 0.0,
+        "tokens_per_sentence": (n / n_sent) if n else 0.0,
     }
 
 
 def _feature_matrix(texts: list[str], *, include_pos: bool) -> dict[str, list[float]]:
     """텍스트 리스트 → {feature: [per-text value]}."""
-    cols: dict[str, list[float]] = {"tokens": [], "filler_rate": [], "pause_rate": []}
+    cols: dict[str, list[float]] = {
+        "tokens": [],
+        "filler_rate": [],
+        "pause_rate": [],
+        "tokens_per_sentence": [],
+    }
     for t in texts:
         f = _surface_features(t)
         for k in cols:

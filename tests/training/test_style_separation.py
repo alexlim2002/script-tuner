@@ -28,6 +28,19 @@ def test_separated_groups_not_collapsed() -> None:
     assert out["max_abs_d"] >= 0.2
 
 
+def test_tokens_per_sentence_separates_segmentation() -> None:
+    # casual: 짧게 토막(문장당 단어 적음), semi: 길게 이어붙임(문장당 단어 많음).
+    # filler가 동일해도 분절 차이만으로 분리가 잡혀야 한다.
+    casual = ["a b c. d e f. g h i.", "j k. l m. n o.", "p q. r s. t u."]
+    semi = ["a b c d e f g h i.", "j k l m n o.", "p q r s t u."]
+    out = ss.style_separation(casual, semi, include_pos=False)
+    tps = out["features"]["tokens_per_sentence"]
+    assert tps["used_for_verdict"] is True
+    assert tps["cohens_d"] > 0  # semi_formal has more tokens per sentence
+    assert tps["matches_expected"] is True
+    assert out["collapsed"] is False
+
+
 def test_pause_excluded_from_verdict_by_default() -> None:
     # pause_rate differs hugely (corpus artifact) but must NOT drive the verdict;
     # with all other features identical, the verdict should be collapse.
