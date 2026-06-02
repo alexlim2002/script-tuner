@@ -8,6 +8,9 @@ dependencies = [
     "python-dotenv>=1.0",
     "tqdm>=4.66",
     "spacy>=3.7",
+    # 구어성 분류기(P(spoken)) 메트릭용 — RandomForest + StandardScaler (cf. ADR-0014).
+    # joblib는 전이 의존성으로 따라온다.
+    "scikit-learn>=1.4",
     # spaCy English model for POS-based stats (module ⑤). Declared so `uv sync` keeps it;
     # it was previously installed ad-hoc via `spacy download`, which any sync would wipe.
     "en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
@@ -88,6 +91,8 @@ module = [
     "datasets", "datasets.*",
     "bitsandbytes", "bitsandbytes.*",
     "triton", "triton.*",
+    "sklearn", "sklearn.*",
+    "joblib", "joblib.*",
 ]
 ignore_missing_imports = true
 follow_imports = "skip"

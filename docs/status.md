@@ -2,7 +2,7 @@
 
 > 본 문서는 **상태 추적용**이다. 일상적으로 업데이트한다. 정적 설계는 `docs/design/`, 결정 이력은 `docs/decisions/`(ADR), 거친 작업 메모는 `.work/`(gitignore)에 둔다.
 
-마지막 업데이트: 2026-05-31
+마지막 업데이트: 2026-06-03
 
 ---
 
@@ -33,6 +33,7 @@
 - [ADR-0011](decisions/0011-corpus-adapter-interface.md) — 코퍼스 어댑터 인터페이스 + stem-centric 파이프라인 (`run --through`)
 - [ADR-0012](decisions/0012-target-punctuation-normalization.md) — 학습 target 구두점 정규화 (Tier A 즉시 / Tier B 재구두점 / 문법 스코프 아웃)
 - [ADR-0013](decisions/0013-semi-formal-data-sourcing.md) — Semi-formal 데이터 조달 (scripted 금지 · Path B 기각 · AMI+ICSI 1순위 / MICASE 2순위)
+- [ADR-0014](decisions/0014-spokenness-classifier-metric.md) — 구어성 분류기 P(spoken) 델타 메트릭 (LogReg; pause 제외·filler 포함; train⊆모델 train)
 
 ## 다음 액션 (단기)
 
@@ -46,6 +47,7 @@
    - ⓕ `pairs --all --monologues-subdir` + rate-limit 재시도 일반화 ✅(`llm/rate_limit.py`의 `RateLimitRetryClient`를 모든 provider에 적용; max_retries 반복). + OpenRouter provider 라우팅(`LLM_PROVIDER_SORT=price`, `MAX_PROMPT/COMPLETION`)으로 저가 provider 한정 — Groq 무료 TPM 8k가 너무 낮아 OpenRouter 유료 저가(prompt≤0.2/compl≤0.4 $/M, gpt-oss-120b)로 전환.
    - ⓖ 전량 pairs ✅(**2,055/114 stem, skip 0, 429 0**) → aggregate ✅(2,055) → split ✅(train 1,636/val 209/test 210, 화자 47명, 누수 0) → format t5gemma2-1b ✅(styles=[semi_formal]).
    - ⓗ 통합(casual+semi_formal) 학습·판정 ✅ — COMBINED 데이터셋(train 3,049/val 382/test 381, 누수 0) Kaggle 학습 → 어댑터 `aip-scripttuner-team/scripttuner-t5gemma2-1b-combined`. **paired generation으로 분리 확인**(collapse 아님): 제어 토큰이 두 스타일을 분기시킨다 — semi_formal이 절을 길게 이어붙이고(분절 d>0.2, 데이터·출력 모두 기대방향 일치) casual은 pause+짧은 토막. ※ filler_rate는 데이터부터 기대 반대(AMI 회의의 머뭇거림=장르 차이)라 register 신호로 보지 않음.
+   - ⓘ 구어성 델타 메트릭 ✅([ADR-0014](decisions/0014-spokenness-classifier-metric.md), `training/spokenness.py` + `evaluate --spokenness-model`) — 분류기 P(spoken)의 input→output 델타로 "얼마나 구어스러워졌나"를 절대축으로 측정(style_separation의 상대 분기와 상보). 분류기는 COMBINED train split 학습(LogReg, **holdout auc 0.806**; filler·contraction 주도). **최종 모델 paired 예측 결과: input 0.428→output 0.577, Δ=+0.149**(casual +0.118 / semi_formal +0.180) — 두 스타일 모두 입력보다 유의미하게 구어스러워짐. ※ semi_formal>casual 순서는 register가 아니라 AMI 회의 filler quirk(ⓗ 참조). ★ **실측 중 발견: 팀원 분류기 88%는 pause 주석 아티팩트**였음(pause strip 시 chance) → pause 제외·filler 포함으로 재설계. 상세 `.work/note-spokenness-classifier-findings.md`.
    - **남음**: 결과 report 정리. ICSI(동일 NXT)는 필요시 보강. MICASE는 라이선스 현행 확인 후 2차 보강. ※ AMI 다운로더는 공식 v1.6.2(CC BY 4.0); OpenSLR 미러 v1.6.1은 구 라이선스(CC BY-NC-SA 2.5) 동봉.
 3. (선택) Switchboard ④ LLM pairs → SBCSAE와 `aggregate` 합산해 학습 데이터 확장 (비용 발생).
 4. 학습 target 구두점 정규화 (모델 피드백 대응, cf. ADR-0012):
@@ -61,3 +63,4 @@
 - **모델 escalation** — 현 T5Gemma 2-1B 결과가 ref와 잘 정렬. 품질 부족 시 T5Gemma 2-4B 또는 Gemma 4 escalation (12GB+ GPU 필요)
 - **few-shot 도입 시점** — 현재 zero-shot 결과 양호. 후속 코퍼스 추가/품질 이슈 시 재검토
 - **정량 품질 메트릭** — 현 spoken-ness 메트릭(filler/pause/length/lexical density) 외에 BLEU/embedding similarity 도입 여부
+- **구어성 분류기 OOD 점검**(ADR-0014 §5) — 분류기가 일반 구어성을 잡는지 vs 우리 코퍼스 표면을 잡는지, 별도 코퍼스에서 점검. 현 보류(auc~0.75 천장은 formal=LLM 역번역 본질). 보고서에 pause-아티팩트 발견 포함 여부도 미정(`.work/note-spokenness-classifier-findings.md`).

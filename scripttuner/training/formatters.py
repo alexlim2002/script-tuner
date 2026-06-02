@@ -81,14 +81,34 @@ def _format_pair(pair: Pair, *, kind: FormatKind) -> dict[str, Any]:
     }
 
 
+# 입력 프롬프트 템플릿의 본문 경계 마커 — 빌드/역파싱이 공유한다.
+_INPUT_MARKER = "Input:\n"
+_OUTPUT_MARKER = "\n\nOutput:"
+
+
 def _build_input(formal_text: str, control_token: str, instruction: str) -> str:
     return (
         f"{control_token}\n"
         f"{instruction}\n\n"
-        "Input:\n"
-        f"{formal_text}\n\n"
-        "Output:"
+        f"{_INPUT_MARKER}"
+        f"{formal_text}"
+        f"{_OUTPUT_MARKER}"
     )
+
+
+def extract_formal_text(wrapped_input: str) -> str | None:
+    """`_build_input`로 감싼 프롬프트에서 순수 formal_text 본문을 복원한다.
+
+    구어성 델타(ADR-0014)의 'before'는 instruction/control token 스캐폴딩이 아니라
+    변환 대상 본문이어야 한다. 마커를 못 찾으면 None(호출자가 폴백 판단).
+    """
+    start = wrapped_input.find(_INPUT_MARKER)
+    if start == -1:
+        return None
+    body_start = start + len(_INPUT_MARKER)
+    end = wrapped_input.find(_OUTPUT_MARKER, body_start)
+    body = wrapped_input[body_start:end] if end != -1 else wrapped_input[body_start:]
+    return body.strip()
 
 
 def _write_dict_jsonl(path: Path, rows: list[dict[str, Any]]) -> int:

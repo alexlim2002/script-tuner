@@ -151,3 +151,24 @@ def test_pos_stats_phrasal_verb_detected() -> None:
     pairs = [_pair("p1", "A", "I gave up easily.", "I gave up easily.")]
     s = compute_stats(pairs)
     assert s["spoken"]["phrasal_verb_ratio"]["max"] > 0.0
+
+
+@pytestmark_spacy
+def test_pos_stats_pronoun_ratio() -> None:
+    # 'I told you' = PRON VERB PRON → 대명사 2 / alpha 3 ≈ 0.667 (ADR-0014 신규 피처)
+    from scripttuner.preprocessing.stats import _load_spacy, _pos_stats
+
+    nlp = _load_spacy()
+    assert _pos_stats("I told you", nlp)["pronoun_ratio"] == pytest.approx(
+        2 / 3, abs=0.05
+    )
+    # 대명사 없는 문장은 0
+    assert _pos_stats("cats run fast", nlp)["pronoun_ratio"] == pytest.approx(0.0)
+
+
+@pytestmark_spacy
+def test_pos_stats_empty_text_pronoun_ratio_zero() -> None:
+    from scripttuner.preprocessing.stats import _load_spacy, _pos_stats
+
+    nlp = _load_spacy()
+    assert _pos_stats("<pause:long>", nlp)["pronoun_ratio"] == 0.0

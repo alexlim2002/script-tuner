@@ -63,13 +63,78 @@ def _text_features(texts: list[str]) -> dict[str, Any]:
     }
 
 
+def _delta_block(p_input: list[float], p_pred: list[float]) -> dict[str, Any]:
+    """input→prediction P(spoken) 델타 블록(분포)."""
+    delta = [p - i for p, i in zip(p_pred, p_input, strict=True)]
+    return {
+        "n": len(delta),
+        "p_spoken_input": _distribution(p_input),
+        "p_spoken_prediction": _distribution(p_pred),
+        "p_spoken_delta": _distribution(delta),  # headline: prediction - input
+    }
+
+
+def _spokenness_block(
+    rows: list[dict[str, Any]],
+    preds: list[str],
+    refs: list[str],
+    model_path: Path,
+) -> dict[str, Any]:
+    """분류기 P(spoken)으로 input→prediction 델타 블록을 만든다(cf. ADR-0014).
+
+    델타의 'before'는 instruction/control token을 벗긴 순수 formal_text다 —
+    `input`은 래핑된 프롬프트라 그대로 점수 내면 오염된다.
+
+    reference는 있을 때만(없으면 paired-generation 산출물) 천장(ceiling) 분포로 추가.
+    행에 `style`이 있으면 style별 델타도 집계한다(style-branching 최종 모델용).
+    """
+    from scripttuner.training.formatters import extract_formal_text
+    from scripttuner.training.spokenness import load, score
+
+    model = load(model_path)
+    inputs_wrapped = [(r.get("input") or "") for r in rows]
+    inputs_formal = [extract_formal_text(w) or w for w in inputs_wrapped]
+    n_unwrapped = sum(1 for w in inputs_wrapped if extract_formal_text(w) is not None)
+
+    p_input = score(inputs_formal, model)
+    p_pred = score(preds, model)
+
+    block: dict[str, Any] = {
+        "model": str(model_path),
+        "n_input_unwrapped": n_unwrapped,  # 마커 복원 성공 수(나머지는 원문 폴백)
+        **_delta_block(p_input, p_pred),
+    }
+
+    # reference 천장 — 비어있지 않은 reference가 하나라도 있을 때만(paired엔 없음).
+    if any(r.strip() for r in refs):
+        block["p_spoken_reference"] = _distribution(score(refs, model))
+
+    # style별 델타 — 행에 style이 있으면(최종 style-branching 모델).
+    styles = [r.get("style") for r in rows]
+    if any(s for s in styles):
+        by_style: dict[str, Any] = {}
+        for style in sorted({s for s in styles if s}):
+            idx = [i for i, s in enumerate(styles) if s == style]
+            by_style[style] = _delta_block(
+                [p_input[i] for i in idx], [p_pred[i] for i in idx]
+            )
+        block["by_style"] = by_style
+
+    return block
+
+
 def run_evaluate(
     *,
     predictions_path: Path,
     output_path: Path,
     include_pos: bool = True,
+    spokenness_model_path: Path | None = None,
 ) -> dict[str, Any]:
-    """predictions.jsonl을 읽어 구어성 메트릭을 계산하고 metrics.json을 쓴다."""
+    """predictions.jsonl을 읽어 구어성 메트릭을 계산하고 metrics.json을 쓴다.
+
+    `spokenness_model_path`가 주어지면 분류기 P(spoken)으로 input→prediction 델타
+    블록을 추가한다(cf. ADR-0014). 미지정 시 기존 분포 메트릭만 산출한다.
+    """
 
     rows: list[dict[str, Any]] = [
         json.loads(line)
@@ -110,6 +175,10 @@ def run_evaluate(
         "prediction": prediction,
         "reference": reference,
     }
+
+    if spokenness_model_path is not None:
+        metrics["spokenness"] = _spokenness_block(rows, preds, refs, spokenness_model_path)
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
         json.dumps(metrics, indent=2, ensure_ascii=False), encoding="utf-8"

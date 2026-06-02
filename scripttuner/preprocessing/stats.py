@@ -86,20 +86,26 @@ def _load_spacy() -> Language:
 
 
 def _pos_stats(text: str, nlp: Language) -> dict[str, float]:
-    """POS 분석으로 lexical_density, phrasal_verb_ratio 계산."""
+    """POS 분석으로 lexical_density, phrasal_verb_ratio, pronoun_ratio 계산.
+
+    pronoun_ratio는 구어성 분류기(ADR-0014)용 신규 피처 — 대화의 1·2인칭 빈도를
+    잡는다. 분모는 lexical_density와 동일하게 alpha_tokens 길이로 통일한다.
+    """
     clean = _PAUSE_TOKEN_RE.sub("", text)
     doc = nlp(clean)
     alpha_tokens = [t for t in doc if t.is_alpha]
     if not alpha_tokens:
-        return {"lexical_density": 0.0, "phrasal_verb_ratio": 0.0}
+        return {"lexical_density": 0.0, "phrasal_verb_ratio": 0.0, "pronoun_ratio": 0.0}
     content = sum(1 for t in alpha_tokens if t.pos_ in CONTENT_POS)
     verbs = [t for t in doc if t.pos_ == "VERB"]
     phrasal = sum(
         1 for t in doc if t.dep_ == "prt" and t.head.pos_ == "VERB"
     )
+    pronouns = sum(1 for t in alpha_tokens if t.pos_ == "PRON")
     return {
         "lexical_density": content / len(alpha_tokens),
         "phrasal_verb_ratio": phrasal / len(verbs) if verbs else 0.0,
+        "pronoun_ratio": pronouns / len(alpha_tokens),
     }
 
 

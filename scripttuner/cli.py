@@ -22,6 +22,7 @@ import os
 import sys
 from collections import defaultdict
 from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
 
@@ -309,6 +310,32 @@ def _build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--validation-ratio", type=float, default=0.1)
     sp.add_argument("--test-ratio", type=float, default=0.1)
 
+    skt = subparsers.add_parser(
+        "spokenness-train",
+        help="Train the P(spoken) classifier on the train split (cf. ADR-0014).",
+    )
+    skt.add_argument("corpus", choices=sorted(REGISTRY), help="Corpus name.")
+    skt.add_argument(
+        "--data-dir",
+        type=Path,
+        default=DEFAULT_DATA_DIR,
+        help=f"Base data directory (default: {DEFAULT_DATA_DIR}).",
+    )
+    skt.add_argument(
+        "--splits-dir",
+        type=Path,
+        default=None,
+        help="Input split directory (default: <data-dir>/finetune/<SOURCE>/splits).",
+    )
+    skt.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="Output model path "
+        "(default: <data-dir>/finetune/<SOURCE>/spokenness/clf.joblib).",
+    )
+    skt.add_argument("--seed", type=int, default=42)
+
     fm = subparsers.add_parser(
         "format",
         help="Format fine-tuning splits for a target model family.",
@@ -445,6 +472,13 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     ev.add_argument(
         "--no-pos", action="store_true", help="Skip POS-based metrics (lexical density)."
+    )
+    ev.add_argument(
+        "--spokenness-model",
+        type=Path,
+        default=None,
+        help="Trained spokenness classifier (.joblib from `spokenness-train`). "
+        "If given, adds the input->prediction P(spoken) delta block (cf. ADR-0014).",
     )
 
     pl = subparsers.add_parser(
@@ -812,6 +846,26 @@ def _run_split(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_spokenness_train(args: argparse.Namespace) -> int:
+    from scripttuner.training.spokenness import save, train
+
+    source = _source_name(args.corpus)
+    splits_dir = args.splits_dir or (args.data_dir / "finetune" / source / "splits")
+    out_path = args.output or (args.data_dir / "finetune" / source / "spokenness" / "clf.joblib")
+
+    train_pairs = read_jsonl(splits_dir / "train.jsonl", Pair)
+    model, metrics = train(train_pairs, seed=args.seed)
+    save(model, out_path)
+    (out_path.parent / "metrics.json").write_text(
+        json.dumps(metrics, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    print(
+        f"OK: trained spokenness classifier on {metrics['n_pairs']} pairs -> {out_path} "
+        f"(holdout acc={metrics['holdout_accuracy']:.3f}, auc={metrics['holdout_auc']:.3f})"
+    )
+    return 0
+
+
 def _run_format(args: argparse.Namespace) -> int:
     source = _source_name(args.corpus)
     splits_dir = args.splits_dir or (args.data_dir / "finetune" / source / "splits")
@@ -897,6 +951,7 @@ def _run_evaluate(args: argparse.Namespace) -> int:
         predictions_path=args.predictions,
         output_path=output_path,
         include_pos=not args.no_pos,
+        spokenness_model_path=args.spokenness_model,
     )
     print(f"OK: wrote metrics for {metrics['n']} predictions to {output_path}")
     return 0
@@ -1029,6 +1084,7 @@ _COMMANDS = {
     "stats": _run_stats,
     "aggregate": _run_aggregate,
     "split": _run_split,
+    "spokenness-train": _run_spokenness_train,
     "format": _run_format,
     "train": _run_train,
     "generate": _run_generate,
