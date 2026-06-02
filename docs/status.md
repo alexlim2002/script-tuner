@@ -63,4 +63,4 @@
 - **모델 escalation** — 현 T5Gemma 2-1B 결과가 ref와 잘 정렬. 품질 부족 시 T5Gemma 2-4B 또는 Gemma 4 escalation (12GB+ GPU 필요)
 - **few-shot 도입 시점** — 현재 zero-shot 결과 양호. 후속 코퍼스 추가/품질 이슈 시 재검토
 - **정량 품질 메트릭** — 현 spoken-ness 메트릭(filler/pause/length/lexical density) 외에 BLEU/embedding similarity 도입 여부
-- **구어성 분류기 OOD 점검**(ADR-0014 §5) — 분류기가 일반 구어성을 잡는지 vs 우리 코퍼스 표면을 잡는지, 별도 코퍼스에서 점검. 현 보류(auc~0.75 천장은 formal=LLM 역번역 본질). 보고서에 pause-아티팩트 발견 포함 여부도 미정(`.work/note-spokenness-classifier-findings.md`).
+- **구어성 메트릭 보고서 반영** — OOD 검증은 범위 밖으로 결정([ADR-0014](decisions/0014-spokenness-classifier-metric.md) §5), 보고서엔 한계로 명시. 열린 판단: pause-아티팩트 발견을 보고서에 담을지(루브릭이 과정/방법론을 보상하면 포함, 결과물 위주면 제외). 상세 `.work/note-spokenness-classifier-findings.md`.
